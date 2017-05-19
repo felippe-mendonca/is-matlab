@@ -1,5 +1,5 @@
+#include "MxArray.hpp"
 #include "mex.h"
-
 #include <functional>
 #include <iostream>
 #include <is/is.hpp>
@@ -7,8 +7,6 @@
 #include <map>
 #include <opencv2/highgui.hpp>
 #include <string>
-
-// mex is.cpp -lSimpleAmqpClient -lopencv_imgcodecs -lopencv_core -v CXXFLAGS='$CXXFLAGS -std=c++14'
 
 namespace mex {
 
@@ -47,6 +45,7 @@ void subscribe(int n_out, mxArray *outputs[], int n_in,
   if (kv == subscriptions.end()) {
     auto info = connection->subscribe(topic);
     subscriptions.emplace(topic, info);
+    is::log::info("Subscribe to topic {} at {}", topic, info.name);
   }
 }
 
@@ -67,39 +66,22 @@ void consume_frame(int n_out, mxArray *outputs[], int n_in,
     mexErrMsgIdAndTxt("is:NoSuchTopic", "Not subscribed to this topic");
   }
 
+  auto before = std::chrono::high_resolution_clock::now();
   auto message = connection->consume(kv->second);
+  auto after = std::chrono::high_resolution_clock::now();
+  is::log::info(">{}", std::chrono::duration_cast<std::chrono::milliseconds>(
+                           after - before)
+                           .count());
+
   auto image = is::msgpack<is::msg::camera::CompressedImage>(message);
   cv::Mat frame = cv::imdecode(image.data, CV_LOAD_IMAGE_COLOR);
-  mwSize dims[3] = {frame.rows, frame.cols, 1};
-
-  // O PIRU TA AQUI!!!
-  outputs[0] = mxCreateNumericArray(3, dims, mxUINT8_CLASS, mxREAL);
-  unsigned char *matrix = (unsigned char *)mxGetData(outputs[0]);
-
-  std::vector<cv::Mat> channels;
-  cv::split(frame, channels);
-  std::copy(channels[0].datastart, channels[0].dataend, matrix);
-}
-
-// AQUI PRA TESTAR O PIRU
-void test(int n_out, mxArray *outputs[], int n_in, const mxArray *inputs[]) {
-  if (n_in != 1) {
-    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected atleast one argument.");
+  if (frame.channels() == 3) {
+    cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
+  } else if (frame.channels() == 4) {
+    cv::cvtColor(frame, frame, cv::COLOR_BGRA2RGBA);
   }
 
-  cv::Mat[] = {cv::ones(10, 5, CV_U8), cv::ones(10, 5, CV_U8), cv::ones(10, 5, CV_U8)} 
-
-  const char *path = mxArrayToString(inputs[0]);
-
-  cv::Mat frame = cv::imread(path, CV_LOAD_IMAGE_COLOR);
-  mwSize dims[3] = {frame.rows, frame.cols, 1};
-
-  outputs[0] = mxCreateNumericArray(3, dims, mxUINT8_CLASS, mxREAL);
-  unsigned char *matrix = (unsigned char *)mxGetData(outputs[0]);
-
-  std::vector<cv::Mat> channels;
-  cv::split(frame, channels);
-  std::copy(channels[0].datastart, channels[0].dataend, matrix);
+  outputs[0] = MxArray(frame);
 }
 
 } // ::mex
@@ -108,15 +90,13 @@ using handle_t = std::function<void(int, mxArray **, int, const mxArray **)>;
 std::map<std::string, handle_t> handlers{{"connect", mex::connect},
                                          {"close", mex::close},
                                          {"subscribe", mex::subscribe},
-                                         {"consume_frame", mex::consume_frame},
-                                         {"test", mex::test}};
+                                         {"consume_frame", mex::consume_frame}};
 
 void mexFunction(int n_out, mxArray *outputs[], int n_in,
                  const mxArray *inputs[]) {
   if (n_in == 0) {
     mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected atleast one argument.");
   }
-
   char *key = mxArrayToString(inputs[0]);
   auto &&iterator = handlers.find(key);
   if (iterator != handlers.end()) {
