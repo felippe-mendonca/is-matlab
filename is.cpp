@@ -69,9 +69,9 @@ void consume_frame(int n_out, mxArray *outputs[], int n_in,
   auto before = std::chrono::high_resolution_clock::now();
   auto message = connection->consume(kv->second);
   auto after = std::chrono::high_resolution_clock::now();
-  is::log::info(">{}", std::chrono::duration_cast<std::chrono::milliseconds>(
-                           after - before)
-                           .count());
+  // is::log::info(">{}", std::chrono::duration_cast<std::chrono::milliseconds>(
+  //                          after - before)
+  //                          .count());
 
   auto image = is::msgpack<is::msg::camera::CompressedImage>(message);
   cv::Mat frame = cv::imdecode(image.data, CV_LOAD_IMAGE_COLOR);
