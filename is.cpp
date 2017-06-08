@@ -1,9 +1,12 @@
 #include "MxArray.hpp"
 #include "mex.h"
+#include "matrix.h"
 #include <functional>
 #include <iostream>
+#include <string>
 #include <is/is.hpp>
 #include <is/msgs/camera.hpp>
+#include <is/msgs/common.hpp>
 #include <map>
 #include <opencv2/highgui.hpp>
 #include <string>
@@ -11,10 +14,12 @@
 namespace mex {
 
 std::unique_ptr<is::Connection> connection;
+std::unique_ptr<is::ServiceClient> client;
 std::map<std::string, is::QueueInfo> subscriptions;
 
 void clean() {
   subscriptions.clear();
+  client = nullptr;
   connection = nullptr;
 }
 
@@ -84,13 +89,49 @@ void consume_frame(int n_out, mxArray *outputs[], int n_in,
   outputs[0] = MxArray(frame);
 }
 
+void set_sample_rate(int n_out, mxArray *outputs[], int n_in, const mxArray *inputs[]) {
+  
+  if (n_in < 2) {
+    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected at least tow arguments.");
+  }
+
+  if (!mxIsScalar(inputs[0])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a scalar.");
+  }
+
+  if (!mxIsCell(inputs[1])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "Second argument must be a cell array.");
+  }
+
+  if (connection == nullptr) {
+    mexErrMsgIdAndTxt("is:NotConnected", "Not connected");
+  }
+
+  if (client == nullptr) {
+    client = std::make_unique<is::ServiceClient>(connection->channel);
+  }
+
+  is::msg::common::SamplingRate sampling_rate;
+  sampling_rate.rate = mxGetScalar(inputs[0]);
+
+  const mwSize *n_elements; 
+  n_elements = mxGetDimensions(inputs[1]);
+  mxArray *cellElement;
+  for (int i = 0; i < n_elements[1]; i++) {
+    cellElement = mxGetCell(inputs[1], i);
+    char *camera =  mxArrayToString(cellElement);
+    client->request(std::string(camera) + ".set_sample_rate", is::msgpack(sampling_rate));
+  }
+}
+
 } // ::mex
 
 using handle_t = std::function<void(int, mxArray **, int, const mxArray **)>;
 std::map<std::string, handle_t> handlers{{"connect", mex::connect},
                                          {"close", mex::close},
                                          {"subscribe", mex::subscribe},
-                                         {"consume_frame", mex::consume_frame}};
+                                         {"consume_frame", mex::consume_frame},
+                                         {"set_sample_rate", mex::set_sample_rate}};
 
 void mexFunction(int n_out, mxArray *outputs[], int n_in,
                  const mxArray *inputs[]) {
