@@ -1,21 +1,33 @@
 #include "MxArray.hpp"
-#include "mex.h"
 #include "matrix.h"
+#include "mex.h"
+#include <armadillo>
 #include <functional>
 #include <iostream>
-#include <string>
 #include <is/is.hpp>
 #include <is/msgs/camera.hpp>
 #include <is/msgs/common.hpp>
 #include <map>
 #include <opencv2/highgui.hpp>
 #include <string>
+#include <string>
+#include "arma.hpp"
 
 namespace mex {
 
 std::unique_ptr<is::Connection> connection;
 std::unique_ptr<is::ServiceClient> client;
 std::map<std::string, is::QueueInfo> subscriptions;
+
+using namespace arma;
+
+//  creates an armadillo matrix from a matlab matrix
+mat armaMatrix(const mxArray *matlabMatrix[]) {
+  mwSize nrows = mxGetM(matlabMatrix[0]);
+  mwSize ncols = mxGetN(matlabMatrix[0]);
+  double *values = mxGetPr(matlabMatrix[0]);
+  return mat(values, nrows, ncols);
+}
 
 void clean() {
   subscriptions.clear();
@@ -89,8 +101,9 @@ void consume_frame(int n_out, mxArray *outputs[], int n_in,
   outputs[0] = MxArray(frame);
 }
 
-void set_sample_rate(int n_out, mxArray *outputs[], int n_in, const mxArray *inputs[]) {
-  
+void set_sample_rate(int n_out, mxArray *outputs[], int n_in,
+                     const mxArray *inputs[]) {
+
   if (n_in < 2) {
     mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected at least tow arguments.");
   }
@@ -100,7 +113,8 @@ void set_sample_rate(int n_out, mxArray *outputs[], int n_in, const mxArray *inp
   }
 
   if (!mxIsCell(inputs[1])) {
-    mexErrMsgIdAndTxt("is:InvalidArgType", "Second argument must be a cell array.");
+    mexErrMsgIdAndTxt("is:InvalidArgType",
+                      "Second argument must be a cell array.");
   }
 
   if (connection == nullptr) {
@@ -114,24 +128,55 @@ void set_sample_rate(int n_out, mxArray *outputs[], int n_in, const mxArray *inp
   is::msg::common::SamplingRate sampling_rate;
   sampling_rate.rate = mxGetScalar(inputs[0]);
 
-  const mwSize *n_elements; 
+  const mwSize *n_elements;
   n_elements = mxGetDimensions(inputs[1]);
   mxArray *cellElement;
   for (int i = 0; i < n_elements[1]; i++) {
     cellElement = mxGetCell(inputs[1], i);
-    char *camera =  mxArrayToString(cellElement);
-    client->request(std::string(camera) + ".set_sample_rate", is::msgpack(sampling_rate));
+    char *camera = mxArrayToString(cellElement);
+    client->request(std::string(camera) + ".set_sample_rate",
+                    is::msgpack(sampling_rate));
   }
+}
+
+void publish_bbs(int n_out, mxArray *outputs[], int n_in,
+                 const mxArray *inputs[]) {
+  if (n_in < 2) {
+    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected at least tow arguments.");
+  }
+
+  if (!mxIsChar(inputs[0])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a string.");
+  }
+
+  // if (!mxIsArray(inputs[1])) {
+  //   mexErrMsgIdAndTxt("is:InvalidArgType", "Second argument must be a
+  //   matrix.");
+  // }
+
+  if (connection == nullptr) {
+    mexErrMsgIdAndTxt("is:NotConnected", "Not connected");
+  }
+
+  if (client == nullptr) {
+    client = std::make_unique<is::ServiceClient>(connection->channel);
+  }
+
+  const char *topic = mxArrayToString(inputs[0]);
+  mat bbs = armaMatrix(&inputs[1]); // matrix Nx5 (x, y, w, h, score)
+  connection->publish(topic, is::msgpack(bbs));
 }
 
 } // ::mex
 
 using handle_t = std::function<void(int, mxArray **, int, const mxArray **)>;
-std::map<std::string, handle_t> handlers{{"connect", mex::connect},
-                                         {"close", mex::close},
-                                         {"subscribe", mex::subscribe},
-                                         {"consume_frame", mex::consume_frame},
-                                         {"set_sample_rate", mex::set_sample_rate}};
+std::map<std::string, handle_t> handlers{
+    {"connect", mex::connect},
+    {"close", mex::close},
+    {"subscribe", mex::subscribe},
+    {"consume_frame", mex::consume_frame},
+    {"set_sample_rate", mex::set_sample_rate},
+    {"publish_bbs", mex::publish_bbs}};
 
 void mexFunction(int n_out, mxArray *outputs[], int n_in,
                  const mxArray *inputs[]) {
