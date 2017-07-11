@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
       bbs.each_row([&](arma::rowvec const& a) {
         cv::rectangle(current_frame, cv::Rect(a(0), a(1), a(2), a(3)), cv::Scalar(0, 255, 0), 3);
         std::stringstream ss_text;
-        ss_text << std::setprecision(2) << a(4);
+        ss_text << std::setw(4) << a(4);
         std::string text = ss_text.str();
         int fontface = cv::FONT_HERSHEY_SIMPLEX;
         double scale = 1.0;
