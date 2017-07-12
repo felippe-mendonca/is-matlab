@@ -1,16 +1,17 @@
 #include <armadillo>
 #include <boost/iterator/zip_iterator.hpp>
 #include <boost/program_options.hpp>
+#include <iomanip>
 #include <iostream>
 #include <is/is.hpp>
 #include <is/msgs/camera.hpp>
 #include <is/msgs/common.hpp>
+#include <map>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <string>
 #include <vector>
-#include <iomanip>
 #include "../arma.hpp"
 
 namespace po = boost::program_options;
@@ -27,6 +28,25 @@ std::ostream& operator<<(std::ostream& os, const std::vector<std::string>& vec) 
   return os;
 }
 }
+
+const std::map<int, cv::Scalar> colors{
+    {1, cv::Scalar(0, 255, 0)},    // green
+    {2, cv::Scalar(0, 0, 255)},    // red
+    {3, cv::Scalar(0, 255, 255)},  // yellow
+    {4, cv::Scalar(255, 0, 0)}     // blue
+};
+
+namespace is {
+void putText(cv::Mat& frame, std::string const& text, cv::Point point, int fontFace, double fontScale,
+             cv::Scalar color, cv::Scalar backgroundColor, int tickness = 1, int linetype = 8,
+             bool bottomLeftOrigin = false) {
+  int baseline = 0;
+  cv::Size text_size = cv::getTextSize(text, fontFace, fontScale, tickness, &baseline);
+  cv::rectangle(frame, point + cv::Point(0, baseline), point + cv::Point(text_size.width, -text_size.height),
+                backgroundColor, CV_FILLED);
+  cv::putText(frame, text, point, fontFace, fontScale, color, tickness, linetype);
+}
+}  // ::is
 
 int main(int argc, char* argv[]) {
   std::string uri;
@@ -94,19 +114,21 @@ int main(int argc, char* argv[]) {
       cv::Mat current_frame = cv::imdecode(image.data, CV_LOAD_IMAGE_COLOR);
 
       bbs.each_row([&](arma::rowvec const& a) {
-        cv::rectangle(current_frame, cv::Rect(a(0), a(1), a(2), a(3)), cv::Scalar(0, 255, 0), 3);
+        cv::rectangle(current_frame, cv::Rect(a(0), a(1), a(2), a(3)), colors.at(static_cast<int>(a(5))), 3);
         std::stringstream ss_text;
         ss_text << std::setw(4) << a(4);
         std::string text = ss_text.str();
         int fontface = cv::FONT_HERSHEY_SIMPLEX;
         double scale = 1.0;
         int tickness = 2;
-        int baseline = 0;
+
         cv::Point point(a(0) + a(2), a(1) + a(3));
-        cv::Size text_size = cv::getTextSize(text, fontface, scale, tickness, &baseline);
-        cv::rectangle(current_frame, point + cv::Point(0, baseline), point + cv::Point(text_size.width, -text_size.height), cv::Scalar(0,0,0), CV_FILLED);
-        cv::putText(current_frame, text, point, cv::FONT_HERSHEY_SCRIPT_SIMPLEX, scale, cv::Scalar(0, 255, 255), tickness, 8);
+        is::putText(current_frame, text, point, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(0, 255, 255),
+                    cv::Scalar(0, 0, 0), tickness);
       });
+      
+      is::putText(current_frame, "ptgrey." + std::to_string(n_frame), cv::Point(0, 22), cv::FONT_HERSHEY_SIMPLEX,
+                  1.0, colors.at(n_frame + 1), cv::Scalar(0, 0, 0), 2);
 
       cv::resize(current_frame, current_frame, cv::Size(current_frame.cols / 2, current_frame.rows / 2));
       if (n_frame < 2) {
