@@ -141,8 +141,8 @@ void set_sample_rate(int n_out, mxArray *outputs[], int n_in,
 
 void publish_bbs(int n_out, mxArray *outputs[], int n_in,
                  const mxArray *inputs[]) {
-  if (n_in < 2) {
-    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected at least tow arguments.");
+  if (n_in != 2) {
+    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected tow arguments.");
   }
 
   if (!mxIsChar(inputs[0])) {
