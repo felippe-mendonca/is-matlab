@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
         int tickness = 2;
 
         cv::Point point(a(0) + a(2), a(1) + a(3));
-        is::putText(current_frame, text, point, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(0, 255, 255),
+        is::putText(current_frame, text, point, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(255, 255, 255),
                     cv::Scalar(0, 0, 0), tickness);
       });
       

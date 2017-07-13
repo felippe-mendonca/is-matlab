@@ -56,13 +56,31 @@ void subscribe(int n_out, mxArray *outputs[], int n_in,
     mexErrMsgIdAndTxt("is:NotConnected", "Not connected");
   }
 
-  const char *topic = mxArrayToString(inputs[0]);
+  std::vector<std::string> topics;
+  if (mxIsChar(inputs[0])) {
+    char *topic = mxArrayToString(inputs[0]);
+    topics.push_back(topic);
+  }
+  else if (mxIsCell(inputs[0])) {
+    const mwSize *n_elements;
+    n_elements = mxGetDimensions(inputs[0]);
+    mxArray *cellElement;
+    for (int i = 0; i < n_elements[1]; i++) {
+      cellElement = mxGetCell(inputs[0], i);
+      char *topic = mxArrayToString(cellElement);
+      topics.push_back(topic);
+    }
+  } else {
+    mexErrMsgIdAndTxt("is:InvalidArgCount", "Argument must be a string or an array cell of strings.");
+  }
 
-  auto kv = subscriptions.find(topic);
-  if (kv == subscriptions.end()) {
-    auto info = connection->subscribe(topic);
-    subscriptions.emplace(topic, info);
-    is::log::info("Subscribe to topic {} at {}", topic, info.name);
+  for (auto& topic : topics) {
+    auto kv = subscriptions.find(topic);
+    if (kv == subscriptions.end()) {
+      auto info = connection->subscribe(topic);
+      subscriptions.emplace(topic, info);
+      is::log::info("Subscribe to topic {} at {}", topic, info.name);
+    }
   }
 }
 
@@ -83,13 +101,7 @@ void consume_frame(int n_out, mxArray *outputs[], int n_in,
     mexErrMsgIdAndTxt("is:NoSuchTopic", "Not subscribed to this topic");
   }
 
-  auto before = std::chrono::high_resolution_clock::now();
   auto message = connection->consume(kv->second);
-  auto after = std::chrono::high_resolution_clock::now();
-  // is::log::info(">{}", std::chrono::duration_cast<std::chrono::milliseconds>(
-  //                          after - before)
-  //                          .count());
-
   auto image = is::msgpack<is::msg::camera::CompressedImage>(message);
   cv::Mat frame = cv::imdecode(image.data, CV_LOAD_IMAGE_COLOR);
   if (frame.channels() == 3) {
@@ -101,20 +113,71 @@ void consume_frame(int n_out, mxArray *outputs[], int n_in,
   outputs[0] = MxArray(frame);
 }
 
+void consume_frames_sync(int n_out, mxArray *outputs[], int n_in,
+                   const mxArray *inputs[]) {
+  if (n_in != 2) {
+    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected two arguments.");
+  }
+
+  if (!mxIsCell(inputs[0])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a cell array.");
+  }
+
+  if (connection == nullptr) {
+    mexErrMsgIdAndTxt("is:NotConnected", "Not connected");
+  }
+
+  const mwSize *n_elements;
+  n_elements = mxGetDimensions(inputs[0]);
+  mxArray *cellElement;
+  std::vector<std::string> topics;
+  for (int i = 0; i < n_elements[1]; i++) {
+    cellElement = mxGetCell(inputs[0], i);
+    char *topic = mxArrayToString(cellElement);
+    topics.push_back(topic);
+  }
+  
+  std::vector<is::QueueInfo> infos;
+  for (auto& topic : topics) {
+    auto kv = subscriptions.find(topic);
+    if (kv == subscriptions.end()) {
+      mexErrMsgIdAndTxt("is:NoSuchTopic", "Not subscribed to topic.");
+    }
+    infos.push_back(kv->second);
+  }
+
+  int64_t period_ms = static_cast<int64_t>(1000.0 / mxGetScalar(inputs[1]));
+  auto messages = connection->consume_sync(infos, period_ms);
+  
+  mxArray *cell_images;
+  cell_images = mxCreateCellMatrix((mwSize)messages.size(), 1);
+  int i = 0;
+  for (auto& msg : messages) {
+    auto image = is::msgpack<is::msg::camera::CompressedImage>(msg);
+    cv::Mat frame = cv::imdecode(image.data, CV_LOAD_IMAGE_COLOR);
+    if (frame.channels() == 3) {
+      cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
+    } else if (frame.channels() == 4) {
+      cv::cvtColor(frame, frame, cv::COLOR_BGRA2RGBA);
+    }
+    mxSetCell(cell_images, i++, MxArray(frame));
+  }
+  outputs[0] = cell_images;
+}
+
 void set_sample_rate(int n_out, mxArray *outputs[], int n_in,
                      const mxArray *inputs[]) {
 
-  if (n_in < 2) {
+  if (n_in != 2) {
     mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected at least tow arguments.");
   }
 
-  if (!mxIsScalar(inputs[0])) {
-    mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a scalar.");
+  if (!mxIsCell(inputs[0])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a cell array.");
   }
 
-  if (!mxIsCell(inputs[1])) {
-    mexErrMsgIdAndTxt("is:InvalidArgType",
-                      "Second argument must be a cell array.");
+  if (!mxIsScalar(inputs[1])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "Second argument must be a scalar.");
   }
 
   if (connection == nullptr) {
@@ -126,13 +189,13 @@ void set_sample_rate(int n_out, mxArray *outputs[], int n_in,
   }
 
   is::msg::common::SamplingRate sampling_rate;
-  sampling_rate.rate = mxGetScalar(inputs[0]);
+  sampling_rate.rate = mxGetScalar(inputs[1]);
 
   const mwSize *n_elements;
-  n_elements = mxGetDimensions(inputs[1]);
+  n_elements = mxGetDimensions(inputs[0]);
   mxArray *cellElement;
   for (int i = 0; i < n_elements[1]; i++) {
-    cellElement = mxGetCell(inputs[1], i);
+    cellElement = mxGetCell(inputs[0], i);
     char *camera = mxArrayToString(cellElement);
     client->request(std::string(camera) + ".set_sample_rate",
                     is::msgpack(sampling_rate));
@@ -149,11 +212,6 @@ void publish_bbs(int n_out, mxArray *outputs[], int n_in,
     mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a string.");
   }
 
-  // if (!mxIsArray(inputs[1])) {
-  //   mexErrMsgIdAndTxt("is:InvalidArgType", "Second argument must be a
-  //   matrix.");
-  // }
-
   if (connection == nullptr) {
     mexErrMsgIdAndTxt("is:NotConnected", "Not connected");
   }
@@ -167,6 +225,57 @@ void publish_bbs(int n_out, mxArray *outputs[], int n_in,
   connection->publish(topic, is::msgpack(bbs));
 }
 
+void sync_request(int n_out, mxArray *outputs[], int n_in,
+                     const mxArray *inputs[]) {
+
+  if (n_in != 2) {
+    mexErrMsgIdAndTxt("is:InvalidArgCount", "Expected at least tow arguments.");
+  }
+
+  if (!mxIsCell(inputs[0])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "First argument must be a cell array.");
+  }
+
+  if (!mxIsScalar(inputs[1])) {
+    mexErrMsgIdAndTxt("is:InvalidArgType", "Second argument must be a scalar.");
+  }
+
+  if (connection == nullptr) {
+    mexErrMsgIdAndTxt("is:NotConnected", "Not connected");
+  }
+
+  if (client == nullptr) {
+    client = std::make_unique<is::ServiceClient>(connection->channel);
+  }
+
+  const mwSize *n_elements;
+  n_elements = mxGetDimensions(inputs[0]);
+  mxArray *cellElement;
+  std::vector<std::string> entities;
+  for (int i = 0; i < n_elements[1]; i++) {
+    cellElement = mxGetCell(inputs[0], i);
+    char *camera = mxArrayToString(cellElement);
+    entities.push_back(camera);
+  }
+
+  is::msg::common::SyncRequest request;
+  request.entities = entities;
+  is::msg::common::SamplingRate sr;
+  sr.rate = mxGetScalar(inputs[1]);
+  request.sampling_rate = sr;
+  auto id = client->request("is.sync", is::msgpack(request));
+  is::log::info("Waiting for sync request [1min]...");
+  auto msg = client->receive_for(std::chrono::minutes(1), id, is::policy::discard_others);
+  bool ret_value;
+  if (msg == nullptr) {
+    ret_value = false;
+  } else {
+    auto reply = is::msgpack<is::msg::common::Status>(msg);
+    ret_value = reply.value == "ok";
+  }
+  outputs[0] = mxCreateLogicalScalar(mxLogical(ret_value));
+}
+
 } // ::mex
 
 using handle_t = std::function<void(int, mxArray **, int, const mxArray **)>;
@@ -175,8 +284,10 @@ std::map<std::string, handle_t> handlers{
     {"close", mex::close},
     {"subscribe", mex::subscribe},
     {"consume_frame", mex::consume_frame},
+    {"consume_frames_sync", mex::consume_frames_sync},
     {"set_sample_rate", mex::set_sample_rate},
-    {"publish_bbs", mex::publish_bbs}};
+    {"publish_bbs", mex::publish_bbs},
+    {"sync_request", mex::sync_request}};
 
 void mexFunction(int n_out, mxArray *outputs[], int n_in,
                  const mxArray *inputs[]) {
